@@ -14,7 +14,7 @@ from telegram.ext import (
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-TOKEN = os.environ.get("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
+TOKEN = os.environ.get("BOT_TOKEN", "8604173888:AAFF8fh-qgDGQ2nlvqaJPz1kmb2qkCDv4_g")
 
 # DB
 def init_db():
