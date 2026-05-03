@@ -11,16 +11,12 @@ from telegram.ext import (
     MessageHandler,
     filters,
     ContextTypes,
-    ConversationHandler,
 )
 
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 TOKEN = os.environ.get("BOT_TOKEN", "8604173888:AAFF8fh-qgDGQ2nlvqaJPz1kmb2qkCDv4_g")
-
-# States
-MENU, AMOUNT_IN, AMOUNT_OUT, CATEGORY_IN, CATEGORY_OUT, ITEM_OUT, TAX_OUT, CONFIRM = range(8)
 
 def init_db():
     conn = sqlite3.connect("budget.db")
@@ -50,8 +46,7 @@ def init_db():
     conn.commit()
     conn.close()
 
-# AUTO TAX DETECTION — User tak perlu decide!
-# Category → (tax_claimable, tax_name, message)
+# AUTO TAX DETECTION
 AUTO_TAX = {
     "Rumah": (0, "personal", "🔴 Personal — tak boleh claim tax"),
     "Utiliti": (0, "personal", "🔴 Personal — tak boleh claim tax"),
@@ -67,9 +62,9 @@ AUTO_TAX = {
 # ============== START ==============
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Clear any previous state
-    context.user_data.clear()
+    await show_main_menu(update, context)
 
+async def show_main_menu(update_or_query, context):
     keyboard = [
         [InlineKeyboardButton("💵 MASUK DUIT", callback_data="menu_income"),
          InlineKeyboardButton("💸 KELUAR DUIT", callback_data="menu_expense")],
@@ -78,94 +73,80 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("⚙️ SET BAJET", callback_data="menu_budget"),
          InlineKeyboardButton("🧾 TAX INFO", callback_data="menu_tax")],
     ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await update.message.reply_text(
-        "💰 **BUDGET BOT MUDAH**\n\n"
-        "Hai! Bot ni senang je.\n"
-        "Tap button bawah ni:",
-        reply_markup=reply_markup,
-        parse_mode="Markdown"
-    )
-    return MENU
+    text = "💰 **BUDGET BOT MUDAH**\n\nPilih:"
 
-async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if hasattr(update_or_query, 'message'):
+        # It's an update
+        await update_or_query.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    else:
+        # It's a callback query
+        await update_or_query.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+# ============== CALLBACK ROUTER ==============
+
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
     data = query.data
+    user_id = query.from_user.id
+
+    # Always clear previous data
+    context.user_data.clear()
+    context.user_data["user_id"] = user_id
 
     if data == "menu_income":
-        keyboard = [
-            [InlineKeyboardButton("RM 1,000", callback_data="in_1000"),
-             InlineKeyboardButton("RM 2,000", callback_data="in_2000")],
-            [InlineKeyboardButton("RM 3,000", callback_data="in_3000"),
-             InlineKeyboardButton("RM 4,000", callback_data="in_4000")],
-            [InlineKeyboardButton("RM 5,000", callback_data="in_5000"),
-             InlineKeyboardButton("RM 6,000", callback_data="in_6000")],
-            [InlineKeyboardButton("Taip sendiri ✏️", callback_data="in_custom")],
-            [InlineKeyboardButton("🔙 Menu Utama", callback_data="back_menu")],
-        ]
-        await query.edit_message_text(
-            "💵 **MASUK DUIT**\n\nBerapa duit masuk?",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-        return AMOUNT_IN
-
+        await show_income_amounts(query)
     elif data == "menu_expense":
-        keyboard = [
-            [InlineKeyboardButton("RM 10", callback_data="out_10"),
-             InlineKeyboardButton("RM 20", callback_data="out_20")],
-            [InlineKeyboardButton("RM 50", callback_data="out_50"),
-             InlineKeyboardButton("RM 100", callback_data="out_100")],
-            [InlineKeyboardButton("RM 200", callback_data="out_200"),
-             InlineKeyboardButton("RM 500", callback_data="out_500")],
-            [InlineKeyboardButton("Taip sendiri ✏️", callback_data="out_custom")],
-            [InlineKeyboardButton("🔙 Menu Utama", callback_data="back_menu")],
-        ]
-        await query.edit_message_text(
-            "💸 **KELUAR DUIT**\n\nBerapa duit keluar?",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-        return AMOUNT_OUT
-
+        await show_expense_amounts(query)
     elif data == "menu_balance":
-        return await show_balance(query, context)
-
+        await show_balance(query, context)
     elif data == "menu_summary":
-        return await show_summary(query, context)
-
+        await show_summary(query, context)
     elif data == "menu_budget":
-        await query.edit_message_text(
+        await query.message.reply_text(
             "⚙️ **SET BAJET**\n\n"
             "Taip command ni:\n"
-            "/budget Makan 1000\n\n"
-            "Kategori: Rumah, Utiliti, Kereta, Makan, Anak, Kesihatan, Hutang, Simpanan, Lifestyle"
+            "/budget [kategori] [amaun]\n"
+            "Contoh: /budget Makan 1000"
         )
-        return MENU
-
     elif data == "menu_tax":
-        return await show_tax(query, context)
-
+        await show_tax(query, context)
+    elif data.startswith("in_"):
+        await handle_income_amount(query, context, data)
+    elif data.startswith("out_"):
+        await handle_expense_amount(query, context, data)
+    elif data.startswith("cat_"):
+        await handle_income_category(query, context, data)
+    elif data.startswith("exp_"):
+        await handle_expense_category(query, context, data)
     elif data == "back_menu":
-        return await back_to_menu(query)
+        await show_main_menu(query, context)
 
-    return MENU
+# ============== INCOME ==============
 
-# ============== INCOME FLOW ==============
+async def show_income_amounts(query):
+    keyboard = [
+        [InlineKeyboardButton("RM 1,000", callback_data="in_1000"),
+         InlineKeyboardButton("RM 2,000", callback_data="in_2000")],
+        [InlineKeyboardButton("RM 3,000", callback_data="in_3000"),
+         InlineKeyboardButton("RM 4,000", callback_data="in_4000")],
+        [InlineKeyboardButton("RM 5,000", callback_data="in_5000"),
+         InlineKeyboardButton("RM 6,000", callback_data="in_6000")],
+        [InlineKeyboardButton("Taip sendiri ✏️", callback_data="in_custom")],
+        [InlineKeyboardButton("🔙 Menu Utama", callback_data="back_menu")],
+    ]
+    await query.message.reply_text(
+        "💵 **MASUK DUIT**\n\nBerapa duit masuk?",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 
-async def income_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    data = query.data
-
-    if data == "back_menu":
-        return await back_to_menu(query)
-
+async def handle_income_amount(query, context, data):
     if data == "in_custom":
-        await query.edit_message_text("💵 Taip amaun (nombor je):\nContoh: 5500")
-        return CATEGORY_IN
+        context.user_data["waiting_for"] = "income_amount"
+        await query.message.reply_text("💵 Taip amaun (nombor je):\nContoh: 5500")
+        return
 
     amount = int(data.replace("in_", ""))
     context.user_data["amount"] = amount
@@ -180,58 +161,21 @@ async def income_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("Lain-lain", callback_data="cat_lain")],
         [InlineKeyboardButton("🔙 Menu Utama", callback_data="back_menu")],
     ]
-    await query.edit_message_text(
+    await query.message.reply_text(
         f"💵 **RM {amount:,}**\n\nDuit apa ni?",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
-    return CATEGORY_IN
 
-async def income_custom_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        amount = float(update.message.text.replace(",", "").replace("RM", "").strip())
-    except ValueError:
-        await update.message.reply_text("❌ Taip nombor je. Contoh: 5500")
-        return CATEGORY_IN
-
-    context.user_data["amount"] = amount
-    context.user_data["type"] = "income"
-
-    keyboard = [
-        [InlineKeyboardButton("💼 Gaji", callback_data="cat_gaji")],
-        [InlineKeyboardButton("💻 Side Hustle", callback_data="cat_side")],
-        [InlineKeyboardButton("📈 Dividen", callback_data="cat_dividen")],
-        [InlineKeyboardButton("🏠 Rental", callback_data="cat_rental")],
-        [InlineKeyboardButton("🎨 Freelance", callback_data="cat_freelance")],
-        [InlineKeyboardButton("Lain-lain", callback_data="cat_lain")],
-        [InlineKeyboardButton("🔙 Menu Utama", callback_data="back_menu")],
-    ]
-    await update.message.reply_text(
-        f"💵 **RM {amount:,.0f}**\n\nDuit apa ni?",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-    return CATEGORY_IN
-
-async def income_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    data = query.data
-
-    if data == "back_menu":
-        return await back_to_menu(query)
-
+async def handle_income_category(query, context, data):
     cat_map = {
-        "cat_gaji": "Gaji",
-        "cat_side": "Side Hustle",
-        "cat_dividen": "Dividen",
-        "cat_rental": "Rental",
-        "cat_freelance": "Freelance",
-        "cat_lain": "Lain-lain",
+        "cat_gaji": "Gaji", "cat_side": "Side Hustle",
+        "cat_dividen": "Dividen", "cat_rental": "Rental",
+        "cat_freelance": "Freelance", "cat_lain": "Lain-lain",
     }
 
     category = cat_map.get(data, "Lain-lain")
     amount = context.user_data.get("amount", 0)
-    user_id = update.effective_user.id
+    user_id = context.user_data.get("user_id", query.from_user.id)
 
     now = datetime.now()
     month = now.strftime("%Y-%m")
@@ -246,29 +190,34 @@ async def income_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.close()
 
     keyboard = [[InlineKeyboardButton("🔙 Menu Utama", callback_data="back_menu")]]
-    await query.edit_message_text(
-        f"✅ **Done!**\n\n"
-        f"💵 {category}\n"
-        f"💰 RM {amount:,.0f}\n\n"
-        f"Duit dah masuk! ✅",
+    await query.message.reply_text(
+        f"✅ **Done!**\n\n💵 {category}\n💰 RM {amount:,.0f}\n\nDuit dah masuk!",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
-    return MENU
 
-# ============== EXPENSE FLOW ==============
+# ============== EXPENSE ==============
 
-async def expense_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
+async def show_expense_amounts(query):
+    keyboard = [
+        [InlineKeyboardButton("RM 10", callback_data="out_10"),
+         InlineKeyboardButton("RM 20", callback_data="out_20")],
+        [InlineKeyboardButton("RM 50", callback_data="out_50"),
+         InlineKeyboardButton("RM 100", callback_data="out_100")],
+        [InlineKeyboardButton("RM 200", callback_data="out_200"),
+         InlineKeyboardButton("RM 500", callback_data="out_500")],
+        [InlineKeyboardButton("Taip sendiri ✏️", callback_data="out_custom")],
+        [InlineKeyboardButton("🔙 Menu Utama", callback_data="back_menu")],
+    ]
+    await query.message.reply_text(
+        "💸 **KELUAR DUIT**\n\nBerapa duit keluar?",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 
-    data = query.data
-
-    if data == "back_menu":
-        return await back_to_menu(query)
-
+async def handle_expense_amount(query, context, data):
     if data == "out_custom":
-        await query.edit_message_text("💸 Taip amaun (nombor je):\nContoh: 35")
-        return ITEM_OUT
+        context.user_data["waiting_for"] = "expense_amount"
+        await query.message.reply_text("💸 Taip amaun (nombor je):\nContoh: 35")
+        return
 
     amount = int(data.replace("out_", ""))
     context.user_data["amount"] = amount
@@ -286,58 +235,19 @@ async def expense_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("🎉 Lifestyle", callback_data="exp_Lifestyle")],
         [InlineKeyboardButton("🔙 Menu Utama", callback_data="back_menu")],
     ]
-    await query.edit_message_text(
+    await query.message.reply_text(
         f"💸 **RM {amount}**\n\nBeli apa?",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
-    return ITEM_OUT
 
-async def expense_custom_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        amount = float(update.message.text.replace(",", "").replace("RM", "").strip())
-    except ValueError:
-        await update.message.reply_text("❌ Taip nombor je. Contoh: 35")
-        return ITEM_OUT
-
-    context.user_data["amount"] = amount
-    context.user_data["type"] = "expense"
-
-    keyboard = [
-        [InlineKeyboardButton("🏠 Rumah", callback_data="exp_Rumah")],
-        [InlineKeyboardButton("⚡ Utiliti", callback_data="exp_Utiliti")],
-        [InlineKeyboardButton("🚗 Kereta", callback_data="exp_Kereta")],
-        [InlineKeyboardButton("🍚 Makan", callback_data="exp_Makan")],
-        [InlineKeyboardButton("👶 Anak", callback_data="exp_Anak")],
-        [InlineKeyboardButton("🏥 Kesihatan", callback_data="exp_Kesihatan")],
-        [InlineKeyboardButton("💸 Hutang", callback_data="exp_Hutang")],
-        [InlineKeyboardButton("🎯 Simpanan", callback_data="exp_Simpanan")],
-        [InlineKeyboardButton("🎉 Lifestyle", callback_data="exp_Lifestyle")],
-        [InlineKeyboardButton("🔙 Menu Utama", callback_data="back_menu")],
-    ]
-    await update.message.reply_text(
-        f"💸 **RM {amount:,.0f}**\n\nBeli apa?",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-    return ITEM_OUT
-
-async def expense_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    data = query.data
-
-    if data == "back_menu":
-        return await back_to_menu(query)
-
+async def handle_expense_category(query, context, data):
     category = data.replace("exp_", "")
-    context.user_data["category"] = category
     amount = context.user_data.get("amount", 0)
+    user_id = context.user_data.get("user_id", query.from_user.id)
 
-    # AUTO DETECT TAX — user tak perlu decide!
     tax_info = AUTO_TAX.get(category, (0, "personal", "🔴 Personal — tak boleh claim tax"))
     tax_claimable, tax_tag, tax_msg = tax_info
 
-    user_id = update.effective_user.id
     now = datetime.now()
     month = now.strftime("%Y-%m")
 
@@ -348,11 +258,8 @@ async def expense_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (user_id, "expense", category, category, amount, tax_tag, tax_claimable, now.isoformat(), month))
     conn.commit()
-    conn.close()
 
     # Budget check
-    conn = sqlite3.connect("budget.db")
-    c = conn.cursor()
     c.execute("SELECT limit_amount FROM budgets WHERE user_id=? AND category=?", (user_id, category))
     result = c.fetchone()
 
@@ -369,15 +276,74 @@ async def expense_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.close()
 
     keyboard = [[InlineKeyboardButton("🔙 Menu Utama", callback_data="back_menu")]]
-    await query.edit_message_text(
-        f"✅ **Done!**\n\n"
-        f"💸 {category}\n"
-        f"💰 RM {amount:,.0f}\n"
-        f"{tax_msg}{budget_msg}\n\n"
-        f"Duit dah record! ✅",
+    await query.message.reply_text(
+        f"✅ **Done!**\n\n💸 {category}\n💰 RM {amount:,.0f}\n{tax_msg}{budget_msg}\n\nDuit dah record!",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
-    return MENU
+
+# ============== TEXT INPUT HANDLER ==============
+
+async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    waiting = context.user_data.get("waiting_for")
+
+    if waiting == "income_amount":
+        try:
+            amount = float(update.message.text.replace(",", "").replace("RM", "").strip())
+        except ValueError:
+            await update.message.reply_text("❌ Taip nombor je. Contoh: 5500")
+            return
+
+        context.user_data["amount"] = amount
+        context.user_data["type"] = "income"
+        context.user_data.pop("waiting_for", None)
+
+        keyboard = [
+            [InlineKeyboardButton("💼 Gaji", callback_data="cat_gaji")],
+            [InlineKeyboardButton("💻 Side Hustle", callback_data="cat_side")],
+            [InlineKeyboardButton("📈 Dividen", callback_data="cat_dividen")],
+            [InlineKeyboardButton("🏠 Rental", callback_data="cat_rental")],
+            [InlineKeyboardButton("🎨 Freelance", callback_data="cat_freelance")],
+            [InlineKeyboardButton("Lain-lain", callback_data="cat_lain")],
+            [InlineKeyboardButton("🔙 Menu Utama", callback_data="back_menu")],
+        ]
+        await update.message.reply_text(
+            f"💵 **RM {amount:,.0f}**\n\nDuit apa ni?",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+    elif waiting == "expense_amount":
+        try:
+            amount = float(update.message.text.replace(",", "").replace("RM", "").strip())
+        except ValueError:
+            await update.message.reply_text("❌ Taip nombor je. Contoh: 35")
+            return
+
+        context.user_data["amount"] = amount
+        context.user_data["type"] = "expense"
+        context.user_data.pop("waiting_for", None)
+
+        keyboard = [
+            [InlineKeyboardButton("🏠 Rumah", callback_data="exp_Rumah")],
+            [InlineKeyboardButton("⚡ Utiliti", callback_data="exp_Utiliti")],
+            [InlineKeyboardButton("🚗 Kereta", callback_data="exp_Kereta")],
+            [InlineKeyboardButton("🍚 Makan", callback_data="exp_Makan")],
+            [InlineKeyboardButton("👶 Anak", callback_data="exp_Anak")],
+            [InlineKeyboardButton("🏥 Kesihatan", callback_data="exp_Kesihatan")],
+            [InlineKeyboardButton("💸 Hutang", callback_data="exp_Hutang")],
+            [InlineKeyboardButton("🎯 Simpanan", callback_data="exp_Simpanan")],
+            [InlineKeyboardButton("🎉 Lifestyle", callback_data="exp_Lifestyle")],
+            [InlineKeyboardButton("🔙 Menu Utama", callback_data="back_menu")],
+        ]
+        await update.message.reply_text(
+            f"💸 **RM {amount:,.0f}**\n\nBeli apa?",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+    else:
+        await update.message.reply_text(
+            "💰 **BUDGET BOT MUDAH**\n\n"
+            "Guna button je. Taip /start untuk menu."
+        )
 
 # ============== BALANCE / SUMMARY / TAX ==============
 
@@ -397,15 +363,10 @@ async def show_balance(query, context):
     status = "🔴 DEFISIT" if baki < 0 else "🟢 SURPLUS"
 
     keyboard = [[InlineKeyboardButton("🔙 Menu Utama", callback_data="back_menu")]]
-    await query.edit_message_text(
-        f"🎯 **BAKI BULAN INI**\n\n"
-        f"💵 Masuk: RM {income:,.0f}\n"
-        f"💸 Keluar: RM {expense:,.0f}\n"
-        f"🎯 Baki: RM {baki:,.0f}\n"
-        f"{status}",
+    await query.message.reply_text(
+        f"🎯 **BAKI BULAN INI**\n\n💵 Masuk: RM {income:,.0f}\n💸 Keluar: RM {expense:,.0f}\n🎯 Baki: RM {baki:,.0f}\n{status}",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
-    return MENU
 
 async def show_summary(query, context):
     user_id = query.from_user.id
@@ -425,15 +386,10 @@ async def show_summary(query, context):
     exp_text = "\n".join([f"• {cat}: RM {amt:,.0f}" for cat, amt in expenses]) or "Tiada"
 
     keyboard = [[InlineKeyboardButton("🔙 Menu Utama", callback_data="back_menu")]]
-    await query.edit_message_text(
-        f"📈 **RINGKASAN {month}**\n\n"
-        f"💵 Masuk: RM {income:,.0f}\n"
-        f"💸 Keluar: RM {expense_total:,.0f}\n"
-        f"🎯 Baki: RM {baki:,.0f}\n\n"
-        f"📊 **Perbelanjaan:**\n{exp_text}",
+    await query.message.reply_text(
+        f"📈 **RINGKASAN {month}**\n\n💵 Masuk: RM {income:,.0f}\n💸 Keluar: RM {expense_total:,.0f}\n🎯 Baki: RM {baki:,.0f}\n\n📊 **Perbelanjaan:**\n{exp_text}",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
-    return MENU
 
 async def show_tax(query, context):
     user_id = query.from_user.id
@@ -444,8 +400,6 @@ async def show_tax(query, context):
     income = c.fetchone()[0] or 0
     c.execute("SELECT SUM(amount) FROM transactions WHERE user_id=? AND type='expense' AND tax_claimable=1", (user_id,))
     relief = c.fetchone()[0] or 0
-
-    # Get relief breakdown
     c.execute("SELECT category, SUM(amount) FROM transactions WHERE user_id=? AND type='expense' AND tax_claimable=1 GROUP BY category", (user_id,))
     relief_breakdown = c.fetchall()
     conn.close()
@@ -453,45 +407,17 @@ async def show_tax(query, context):
     relief_text = "\n".join([f"• {cat}: RM {amt:,.0f}" for cat, amt in relief_breakdown]) or "Tiada"
 
     keyboard = [[InlineKeyboardButton("🔙 Menu Utama", callback_data="back_menu")]]
-    await query.edit_message_text(
-        f"🧾 **TAX INFO**\n\n"
-        f"📊 Total Income: RM {income:,.0f}\n"
-        f"💼 Total Relief: RM {relief:,.0f}\n\n"
-        f"📋 **Relief Breakdown:**\n{relief_text}\n\n"
-        f"💡 Bot auto-tag tax untuk setiap perbelanjaan:\n"
-        f"🟢 Anak, Kesihatan, Simpanan = Boleh claim\n"
-        f"🔴 Lain-lain = Personal",
+    await query.message.reply_text(
+        f"🧾 **TAX INFO**\n\n📊 Total Income: RM {income:,.0f}\n💼 Total Relief: RM {relief:,.0f}\n\n📋 **Relief Breakdown:**\n{relief_text}\n\n💡 Bot auto-tag tax:\n🟢 Anak, Kesihatan, Simpanan = Boleh claim\n🔴 Lain-lain = Personal",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
-    return MENU
-
-# ============== BACK TO MENU ==============
-
-async def back_to_menu(query):
-    keyboard = [
-        [InlineKeyboardButton("💵 MASUK DUIT", callback_data="menu_income"),
-         InlineKeyboardButton("💸 KELUAR DUIT", callback_data="menu_expense")],
-        [InlineKeyboardButton("📊 TENGOK BAKI", callback_data="menu_balance"),
-         InlineKeyboardButton("📈 RINGKASAN", callback_data="menu_summary")],
-        [InlineKeyboardButton("⚙️ SET BAJET", callback_data="menu_budget"),
-         InlineKeyboardButton("🧾 TAX INFO", callback_data="menu_tax")],
-    ]
-    await query.edit_message_text(
-        "💰 **BUDGET BOT MUDAH**\n\n"
-        "Pilih:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-    return MENU
 
 # ============== BUDGET COMMAND ==============
 
 async def budget_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 2:
         await update.message.reply_text(
-            "⚙️ **SET BAJET**\n\n"
-            "Format: /budget [kategori] [amaun]\n"
-            "Contoh: /budget Makan 1000\n\n"
-            "Kategori: Rumah, Utiliti, Kereta, Makan, Anak, Kesihatan, Hutang, Simpanan, Lifestyle"
+            "⚙️ **SET BAJET**\n\nFormat: /budget [kategori] [amaun]\nContoh: /budget Makan 1000"
         )
         return
 
@@ -520,38 +446,10 @@ def main():
 
     application = Application.builder().token(TOKEN).build()
 
-    conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("start", start)],
-        states={
-            MENU: [
-                CallbackQueryHandler(menu_handler, pattern="^menu_"),
-                CallbackQueryHandler(back_to_menu, pattern="^back_menu$")
-            ],
-            AMOUNT_IN: [
-                CallbackQueryHandler(income_amount, pattern="^in_|back_menu"),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, income_custom_amount)
-            ],
-            CATEGORY_IN: [
-                CallbackQueryHandler(income_category, pattern="^cat_|back_menu"),
-                CallbackQueryHandler(back_to_menu, pattern="^back_menu$")
-            ],
-            AMOUNT_OUT: [
-                CallbackQueryHandler(expense_amount, pattern="^out_|back_menu"),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, expense_custom_amount)
-            ],
-            ITEM_OUT: [
-                CallbackQueryHandler(expense_category, pattern="^exp_|back_menu"),
-                CallbackQueryHandler(back_to_menu, pattern="^back_menu$")
-            ],
-        },
-        fallbacks=[
-            CommandHandler("start", start),
-            CallbackQueryHandler(back_to_menu, pattern="^back_menu$")
-        ],
-    )
-
-    application.add_handler(conv_handler)
+    application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("budget", budget_cmd))
+    application.add_handler(CallbackQueryHandler(button_handler))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
 
     application.run_polling()
 
